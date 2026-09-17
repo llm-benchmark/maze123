@@ -1,0 +1,15 @@
+{
+  "id": "123",
+  "collectedGemIds": [
+    "level_GxH:gem:10,1,0",
+    "level_HxH:gem:1,3,0"
+  ],
+  "unlockedLevelIds": [
+    "level_GxH",
+    "level_HxG",
+    "level_HxH",
+    "level_HxI"
+  ],
+  "lastPlayedLevelId": "level_GxH",
+  "updatedAt": "2026-09-17T14:39:44.603Z"
+}

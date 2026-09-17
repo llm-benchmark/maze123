@@ -1,0 +1,731 @@
+diff --git a/public/build.js b/public/build.js
+index d8cb1a2..314e258 100644
+--- a/public/build.js
++++ b/public/build.js
+@@ -285,5 +285,97 @@
+     }
+   });
+ 
++  // ----- 存档 ID 输入框（新增）-----
++  (function initSaveIdBar() {
++    const bar = document.createElement("div");
++    bar.className = "save-id-bar";
++    bar.innerHTML =
++      '<label class="save-id-label">存档 ID</label>' +
++      '<input type="text" id="save-id-input" class="save-id-input" placeholder="输入存档 ID，例如 player1" autocomplete="off" spellcheck="false">' +
++      '<button id="save-id-set" class="save-id-set-button" type="button">设置</button>' +
++      '<span id="save-id-status" class="save-id-status"></span>';
++
++    const pageHead = document.querySelector(".page-head");
++    if (pageHead) {
++      pageHead.parentNode.insertBefore(bar, pageHead.nextSibling);
++    }
++
++    const input = document.getElementById("save-id-input");
++    const setBtn = document.getElementById("save-id-set");
++    const statusEl = document.getElementById("save-id-status");
++
++    function setStatus(msg, isError) {
++      if (!statusEl) return;
++      statusEl.textContent = msg || "";
++      statusEl.classList.toggle("is-error", Boolean(isError));
++    }
++
++    function loadCurrentSaveId() {
++      return window.localStorage && window.localStorage.getItem("mazebench-save-id");
++    }
++
++    function saveCurrentSaveId(id) {
++      if (window.localStorage) {
++        if (id) window.localStorage.setItem("mazebench-save-id", id);
++        else window.localStorage.removeItem("mazebench-save-id");
++      }
++    }
++
++    // 真实的 PLAY 入口是各卡片里的 <a href="/play/...">（不是 .world-card__link，
++    // 那是编辑链接）。卡片是 innerHTML 重建的，所以每次变动都要重新贴一遍。
++    // 用 URL/searchParams.set 保证幂等，不会把 ?save_id= 叠很多次。
++    function refreshPlayLinksWithSaveId(saveId) {
++      const links = document.querySelectorAll('a[href^="/play/"]');
++      for (let i = 0; i < links.length; i += 1) {
++        const href = links[i].getAttribute("href") || "";
++        if (!href.startsWith("/play/")) continue;
++        try {
++          const url = new URL(href, window.location.origin);
++          if (saveId) url.searchParams.set("save_id", saveId);
++          links[i].setAttribute("href", url.pathname + url.search);
++        } catch (error) {
++          /* 保留原链接 */
++        }
++      }
++    }
++
++    if (input) input.value = loadCurrentSaveId() || "";
++    refreshPlayLinksWithSaveId(loadCurrentSaveId());
++
++    // 卡片重渲染后自动补一次（防抖到下一帧）。
++    let refreshPending = false;
++    const observer = new MutationObserver(() => {
++      if (refreshPending) return;
++      refreshPending = true;
++      window.requestAnimationFrame(() => {
++        refreshPending = false;
++        refreshPlayLinksWithSaveId(loadCurrentSaveId());
++      });
++    });
++    observer.observe(document.body, { childList: true, subtree: true });
++
++    function handleSet() {
++      const id = (input && input.value || "").trim();
++      if (!id) {
++        setStatus("请输入一个存档 ID", true);
++        return;
++      }
++      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
++        setStatus("存档 ID 只能用字母、数字、下划线、连字符（1-64 位）", true);
++        return;
++      }
++      saveCurrentSaveId(id);
++      setStatus('存档 ID 已设置为 "' + id + '"，点击 PLAY 后游戏会自动加载这个存档。');
++      refreshPlayLinksWithSaveId(id);
++    }
++
++    if (setBtn) setBtn.addEventListener("click", handleSet);
++    if (input) {
++      input.addEventListener("keydown", function (e) {
++        if (e.key === "Enter") handleSet();
++      });
++    }
++  })();
++
+   renderWorlds();
+ })();
+diff --git a/public/local-site.css b/public/local-site.css
+index 4a166ff..fa2bfaf 100644
+--- a/public/local-site.css
++++ b/public/local-site.css
+@@ -7204,3 +7204,53 @@ button.run-tools__file:focus-visible {
+   position: absolute;
+   transform: translateX(-50%);
+ }
++
++.save-id-bar {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  margin-top: 12px;
++  padding: 10px 12px;
++  background: #1a1d2e;
++  border: 1px solid #2a2f45;
++  border-radius: 8px;
++}
++.save-id-label {
++  font-size: 13px;
++  color: #8892b0;
++  white-space: nowrap;
++}
++.save-id-input {
++  flex: 1;
++  max-width: 240px;
++  padding: 6px 10px;
++  border: 1px solid #3a3f55;
++  border-radius: 6px;
++  background: #0d0f17;
++  color: #c0c8e0;
++  font-size: 13px;
++  outline: none;
++}
++.save-id-input:focus {
++  border-color: #4a9eff;
++}
++.save-id-set-button {
++  padding: 6px 14px;
++  border: none;
++  border-radius: 6px;
++  background: #4a9eff;
++  color: #fff;
++  font-size: 13px;
++  cursor: pointer;
++}
++.save-id-set-button:hover {
++  background: #3a8eef;
++}
++.save-id-status {
++  font-size: 12px;
++  color: #8892b0;
++  margin-left: 8px;
++}
++.save-id-status.is-error {
++  color: #f87171;
++}
+diff --git a/public/play-core.js b/public/play-core.js
+index 5b2e26e..7daf86a 100644
+--- a/public/play-core.js
++++ b/public/play-core.js
+@@ -1,6 +1,20 @@
+ (function () {
+   const modules = window.PlayModules || (window.PlayModules = {});
+ 
++  // 存档：由 play.js 通过 window.__MAZEBENCH_SAVE_ARCHIVE 注入
++  var saveArchive = null;
++
++  function saveArchiveToServer(archive) {
++    if (!archive || !archive.id) return;
++    try {
++      window.fetch("/api/save/" + encodeURIComponent(archive.id), {
++        method: "PUT",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify(archive)
++      }).catch(function () {});
++    } catch (e) {}
++  }
++
+   function createFallbackPlayRules() {
+     const DEFAULT_WORLD_AXIS = Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+     const WORLD_LEVEL_PATTERN = /^level_([A-Z])x([A-Z])$/;
+@@ -631,18 +645,21 @@
+       if (app.isEditorRenderApp || app.ignoreSavedGemProgress) {
+         return new Set();
+       }
+-
++      var archive = window.__MAZEBENCH_SAVE_ARCHIVE;
++      if (archive && Array.isArray(archive.collectedGemIds)) {
++        return new Set(archive.collectedGemIds.filter(function (v) { return typeof v === "string"; }));
++      }
+       try {
+-        const raw = window.localStorage?.getItem(collectedGemStorageKey());
+-        const values = JSON.parse(raw || "[]");
++        var raw = window.localStorage && window.localStorage.getItem(collectedGemStorageKey());
++        var values = JSON.parse(raw || "[]");
+         return new Set(
+           Array.isArray(values)
+             ? values
+-                .filter((value) => typeof value === "string")
++                .filter(function (value) { return typeof value === "string"; })
+                 .map(normalizeGemCollectionId)
+             : []
+         );
+-      } catch (error) {
++      } catch (e) {
+         return new Set();
+       }
+     }
+@@ -651,15 +668,20 @@
+       if (app.isEditorRenderApp || app.ignoreSavedGemProgress) {
+         return;
+       }
+-
+       try {
+         normalizeCollectedGemIds(app.collectedGemIds);
+-        window.localStorage?.setItem(
+-          collectedGemStorageKey(),
+-          JSON.stringify(Array.from(app.collectedGemIds).sort())
+-        );
+-      } catch (error) {
+-        // Storage can fail in private browsing or constrained embedded contexts.
++        if (window.localStorage) {
++          window.localStorage.setItem(
++            collectedGemStorageKey(),
++            JSON.stringify(Array.from(app.collectedGemIds).sort())
++          );
++        }
++      } catch (e) {}
++      var archive = window.__MAZEBENCH_SAVE_ARCHIVE;
++      if (archive) {
++        archive.collectedGemIds = Array.from(app.collectedGemIds).sort();
++        archive.updatedAt = new Date().toISOString();
++        saveArchiveToServer(archive);
+       }
+     }
+ 
+@@ -860,6 +882,12 @@
+     }
+ 
+     app.collectedGemIds = loadCollectedGemIds();
++    app.saveArchive = window.__MAZEBENCH_SAVE_ARCHIVE || saveArchive;
++    app.saveArchiveToServer = saveArchiveToServer;
++    // 存档对象是 play.js 之后才注入的，用函数实时读，避免拿到旧值。
++    app.getSaveArchive = function () {
++      return window.__MAZEBENCH_SAVE_ARCHIVE || saveArchive;
++    };
+ 
+     function createRuntimeActor(actor, index = 0, levelId = app.currentLevelId) {
+       const collectionId = gemCollectionId(actor, index, levelId);
+diff --git a/public/play-theme.css b/public/play-theme.css
+index f3ffdfe..b20ab0f 100644
+--- a/public/play-theme.css
++++ b/public/play-theme.css
+@@ -1589,3 +1589,20 @@ a.save-button:focus-visible {
+     animation-duration: 1.8s;
+   }
+ }
++
++.world-map-cell.has-gem {
++  box-shadow: 0 0 10px rgba(255, 215, 0, 0.9);
++  border-color: #ffd700;
++}
++.world-map-cell.has-gem .world-map-cell-label,
++.world-map-cell.has-gem .world-map-thumb {
++  filter: brightness(1.1);
++}
++.world-map-cell.locked {
++  opacity: 0.45;
++  pointer-events: none;
++  filter: grayscale(0.7);
++}
++.world-map-cell.is-current {
++  border-color: #4a9eff;
++}
+diff --git a/public/play.js b/public/play.js
+index 827fa8f..58ddaf1 100644
+--- a/public/play.js
++++ b/public/play.js
+@@ -152,6 +152,171 @@
+   let worldSolverController = null;
+   const visitedPlayRoomIds = new Set();
+ 
++  // ----- 存档（新增，支持自举）-----
++  // 优先 URL 上的 ?save_id=，其次 localStorage（Build 页面写入），再次页面注入的 saveId。
++  var saveId =
++    (playData && playData.saveId) ||
++    (new URLSearchParams(window.location.search).get("save_id") || "").trim() ||
++    (window.localStorage && window.localStorage.getItem("mazebench-save-id")) ||
++    "";
++  var unlockedLevelIds = new Set();
++  var saveArchive = null;
++  // 没设存档 ID 时不做任何限制，直接回到基线行为（地图全开、无门禁）。
++  var saveGatingEnabled = saveId.length > 0;
++  var lastSavedLevelId = "";
++  var lastSavedGemSignature = "";
++
++  function initialPlayLevelId() {
++    return (
++      (playWorldData && (playWorldData.defaultLevelId || playWorldData.startLevelId)) ||
++      playData.levelId ||
++      ""
++    );
++  }
++
++  function defaultGemStorageKey() {
++    return "pixel-game:" + playData.gameId + ":collected-gems:v1";
++  }
++
++  function readLocalStorageGems() {
++    try {
++      var raw = window.localStorage && window.localStorage.getItem(defaultGemStorageKey());
++      var values = JSON.parse(raw || "[]");
++      return Array.isArray(values)
++        ? values.filter(function (v) { return typeof v === "string"; })
++        : [];
++    } catch (e) {
++      return [];
++    }
++  }
++
++  // 把存档挂到 window 上，play-core.js 在 load/saveCollectedGemIds 里读它。
++  function publishSaveArchive() {
++    window.__MAZEBENCH_SAVE_ARCHIVE = saveArchive || null;
++  }
++
++  // 第一次建档：以"当前所在房间"为种子，保证起点房间可用，其余房间靠走路解锁。
++  function createFreshSaveArchive() {
++    var levelId = String(app.currentLevelId || initialPlayLevelId() || "");
++    saveArchive = {
++      id: saveId,
++      collectedGemIds: readLocalStorageGems(),
++      unlockedLevelIds: levelId ? [levelId] : [],
++      lastPlayedLevelId: levelId,
++      updatedAt: new Date().toISOString()
++    };
++    unlockedLevelIds = new Set(saveArchive.unlockedLevelIds);
++    lastSavedLevelId = levelId;
++    publishSaveArchive();
++    saveArchiveToServer(saveArchive);
++    return saveArchive;
++  }
++
++  function applyLoadedSaveArchive(archive) {
++    if (!archive || !archive.id) return false;
++    saveArchive = archive;
++    publishSaveArchive();
++    if (Array.isArray(archive.unlockedLevelIds)) {
++      unlockedLevelIds = new Set(archive.unlockedLevelIds);
++    }
++    // 你正站着的房间永远算已解锁。
++    var levelId = String(app.currentLevelId || initialPlayLevelId() || "");
++    if (levelId && !unlockedLevelIds.has(levelId)) {
++      unlockedLevelIds.add(levelId);
++    }
++    lastSavedLevelId = archive.lastPlayedLevelId || levelId;
++    // 用存档里的宝石覆盖内存里的 Set（同一个引用，play-core 立刻可见）。
++    if (Array.isArray(archive.collectedGemIds) && app.collectedGemIds instanceof Set) {
++      app.collectedGemIds.clear();
++      archive.collectedGemIds.forEach(function (gemId) {
++        if (typeof gemId === "string") app.collectedGemIds.add(gemId);
++      });
++      lastSavedGemSignature = Array.from(app.collectedGemIds).sort().join("\u0000");
++    }
++    // 存档里的宝石进度要套用到本局 actors 上（否则视觉上不消失）。
++    if (typeof app.applyCollectedGemProgressToActors === "function") {
++      app.applyCollectedGemProgressToActors(app.state.actors, app.currentLevelId);
++    }
++    syncPlayHud();
++    app.render?.();
++    return true;
++  }
++
++  function loadSaveArchive(id) {
++    if (!id) return;
++    try {
++      // 注意：window.fetch 返回的是 Promise，必须在 then 里读 status / json。
++      window.fetch("/api/save/" + encodeURIComponent(id))
++        .then(function (res) {
++          if (!res) return null;
++          // 404：这个 ID 还不存在 —— 自动建第一份存档，解开"没有第一个 ID"的死锁。
++          if (res.status === 404) {
++            createFreshSaveArchive();
++            return null;
++          }
++          if (!res.ok) return null;
++          return res.json().catch(function () { return null; });
++        })
++        .then(function (archive) {
++          if (!archive) return;
++          if (!applyLoadedSaveArchive(archive)) {
++            createFreshSaveArchive();
++          }
++        })
++        .catch(function () {});
++    } catch (e) {}
++  }
++
++  function saveArchiveToServer(archive) {
++    if (!archive || !archive.id) return;
++    try {
++      window.fetch("/api/save/" + encodeURIComponent(archive.id), {
++        method: "PUT",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify(archive)
++      }).catch(function () {});
++    } catch (e) {}
++  }
++
++  // 每 200ms（syncPlayHud）调用：把"当前所在房间"和宝石数同步进存档。
++  // 走路进隔壁房间也会经过这里，所以不再是只有传送才解锁。
++  function syncStoredPlaySave() {
++    if (!saveGatingEnabled) return;
++    if (!saveArchive) return;
++    var levelId = String(app.currentLevelId || "");
++    if (!levelId) return;
++    var changed = false;
++
++    if (!unlockedLevelIds.has(levelId)) {
++      unlockedLevelIds.add(levelId);
++      changed = true;
++    }
++
++    var gemSignature = app.collectedGemIds instanceof Set
++      ? Array.from(app.collectedGemIds).sort().join("\u0000")
++      : "";
++
++    if (gemSignature !== lastSavedGemSignature) {
++      lastSavedGemSignature = gemSignature;
++      changed = true;
++    }
++
++    if (levelId !== lastSavedLevelId) {
++      lastSavedLevelId = levelId;
++      changed = true;
++    }
++
++    if (!changed) return;
++
++    saveArchive.unlockedLevelIds = Array.from(unlockedLevelIds).sort();
++    saveArchive.collectedGemIds = app.collectedGemIds instanceof Set
++      ? Array.from(app.collectedGemIds).sort()
++      : [];
++    saveArchive.lastPlayedLevelId = levelId;
++    saveArchive.updatedAt = new Date().toISOString();
++    saveArchiveToServer(saveArchive);
++  }
++
+   // The controls synchronize overlay/input state immediately, so every piece
+   // of state they read must exist before installation begins.
+   installPlayControls();
+@@ -226,7 +391,9 @@
+     const gemTarget = document.getElementById("play-hud-gems");
+     const currentLevelId = String(app.currentLevelId || playData.levelId || "");
+     if (currentLevelId) visitedPlayRoomIds.add(currentLevelId);
+-    const roomCount = Math.max(currentLevelId ? 1 : 0, visitedPlayRoomIds.size);
++    // 有存档时：把当前房间/宝石进度同步进存档（走路进新房间也会在这里解锁）。
++    syncStoredPlaySave();
++    var roomCount = Math.max(currentLevelId ? 1 : 0, unlockedLevelIds.size || visitedPlayRoomIds.size);
+     const gemCount = app.collectedGemIds instanceof Set ? app.collectedGemIds.size : 0;
+ 
+     if (roomTarget) {
+@@ -613,6 +780,30 @@
+         button.append(label);
+       }
+       if (cell.id === app.currentLevelId) button.classList.add("is-current");
++
++      // 宝石状态
++      var gemKeyPrefix = cell.id + ":gem:";
++      var hasAnyGemInRoom = false;
++      var collectedArr = Array.from(app.collectedGemIds || []);
++      for (var gi = 0; gi < collectedArr.length; gi++) {
++        if (typeof collectedArr[gi] === "string" && collectedArr[gi].indexOf(gemKeyPrefix) === 0) {
++          hasAnyGemInRoom = true;
++          break;
++        }
++      }
++      if (hasAnyGemInRoom) {
++        button.classList.add("has-gem");
++      } else {
++        button.classList.remove("has-gem");
++      }
++
++      // 解锁状态（只在设了存档 ID 时限制；没设 ID 就保持基线行为）
++      if (saveGatingEnabled && !unlockedLevelIds.has(cell.id)) {
++        button.classList.add("locked");
++      } else {
++        button.classList.remove("locked");
++      }
++
+       grid.append(button);
+     });
+   }
+@@ -690,6 +881,11 @@
+       setWorldMapOpen(false);
+       return;
+     }
++    // 传送权限检查（只在设了存档 ID 时生效；还没解锁的房间不能直接传送）
++    if (saveGatingEnabled && !unlockedLevelIds.has(levelId)) {
++      alert("需要先到达这个房间才能传送（" + levelId + "）。");
++      return;
++    }
+     worldMapSwitching = true;
+     setWorldMapOpen(false);
+     syncPlayOverlayInputLock();
+@@ -757,6 +953,17 @@
+           transitionData,
+           onComplete: () => {
+             finishPlayWorldMapSwitch(levelId);
++            // 记录已进入的房间（即使之前已解锁，也要更新 lastPlayedLevelId）。
++            if (saveGatingEnabled) {
++              unlockedLevelIds.add(levelId);
++              if (saveArchive) {
++                saveArchive.unlockedLevelIds = Array.from(unlockedLevelIds).sort();
++                saveArchive.lastPlayedLevelId = levelId;
++                saveArchive.updatedAt = new Date().toISOString();
++                lastSavedLevelId = levelId;
++                saveArchiveToServer(saveArchive);
++              }
++            }
+             resolve();
+           }
+         });
+@@ -1279,14 +1486,24 @@
+   app.syncResetProgressButton();
+   app.syncNoiseTicker();
+   app.syncFloatingFloorTicker();
++
++  // 存档要在游戏真正开始显示之后再加载：宝石进度能套用到本局 actors 上。
++  function bootSaveArchive() {
++    if (saveId) {
++      loadSaveArchive(saveId);
++    }
++  }
++
+   app.preloadImages().finally(function () {
+     if (shouldRunWorldBoot) {
+       runWorldBoot();
++      bootSaveArchive();
+     } else {
+       app.render();
+       revealPlayFrame();
+       bindInput();
+       startWorldSolver();
++      bootSaveArchive();
+     }
+   });
+   window.addEventListener("resize", function () {
+diff --git a/server/app.js b/server/app.js
+index a8aee0f..46e3784 100644
+--- a/server/app.js
++++ b/server/app.js
+@@ -12,6 +12,7 @@ const { createMazePreviewService } = require("./maze-preview");
+ const { createMazeWorldMapService } = require("./maze-world-map");
+ const { createPageRenderer } = require("./pages");
+ const { createRequestRouter } = require("./router");
++const { loadSave, writeSave, listSaveIds, isValidSaveId } = require("./save-files");
+ const { createSolverExportService } = require("./solver-exports");
+ const {
+   ensureDirectory,
+@@ -754,7 +755,11 @@ const { handleRequest } = createRequestRouter({
+   solverExports,
+   training,
+   worldMaps,
+-  writeMazePreviewImageData
++  writeMazePreviewImageData,
++  loadSave,
++  writeSave,
++  listSaveIds,
++  isValidSaveId
+ });
+ 
+ function isExpectedRequestError(error) {
+diff --git a/server/router.js b/server/router.js
+index e980253..c5e7362 100644
+--- a/server/router.js
++++ b/server/router.js
+@@ -43,7 +43,11 @@ function createRequestRouter({
+   solverExports,
+   training,
+   worldMaps,
+-  writeMazePreviewImageData
++  writeMazePreviewImageData,
++  loadSave,
++  writeSave,
++  listSaveIds,
++  isValidSaveId
+ }) {
+   const defaultLevelIdForGame = (game) => worldMaps.defaultLevelIdForGame(game);
+   const isWorldLevelId = (game, levelId) => worldMaps.isMazeWorldLevelId(game.id, levelId);
+@@ -117,6 +121,64 @@ function createRequestRouter({
+       return;
+     }
+ 
++    // ----- 存档 API（新增）-----
++    // 注意：/api/saves 只有两段，必须放在 length===3 判断之外。
++    if (url.pathname === "/api/saves" && request.method === "GET") {
++      sendJson(response, 200, { ids: typeof listSaveIds === "function" ? listSaveIds() : [] });
++      return;
++    }
++
++    if (segments.length === 3 && segments[0] === "api" && segments[1] === "save") {
++      const saveId = decodeURIComponent(segments[2]);
++      if (typeof isValidSaveId !== "function" || !isValidSaveId(saveId)) {
++        sendJson(response, 400, { error: "Invalid save id." });
++        return;
++      }
++      if (!loadSave) {
++        sendJson(response, 500, { error: "Save service not available." });
++        return;
++      }
++      if (url.pathname === `/api/save/${encodeURIComponent(saveId)}`) {
++        if (request.method === "GET") {
++          const save = loadSave(saveId);
++          sendJson(response, save ? 200 : 404, save || { error: "Save not found." });
++          return;
++        }
++        if (request.method === "PUT") {
++          const payload = await readJsonBody(request);
++          const existing = loadSave(saveId) || {
++            id: saveId,
++            collectedGemIds: [],
++            unlockedLevelIds: [],
++            lastPlayedLevelId: "",
++            updatedAt: new Date().toISOString()
++          };
++          const updated = {
++            ...existing,
++            id: saveId,
++            collectedGemIds: Array.isArray(payload?.collectedGemIds)
++              ? payload.collectedGemIds
++              : existing.collectedGemIds,
++            unlockedLevelIds: Array.isArray(payload?.unlockedLevelIds)
++              ? payload.unlockedLevelIds
++              : existing.unlockedLevelIds,
++            lastPlayedLevelId:
++              typeof payload?.lastPlayedLevelId === "string"
++                ? payload.lastPlayedLevelId
++                : existing.lastPlayedLevelId,
++            updatedAt: new Date().toISOString()
++          };
++          writeSave(saveId, updated);
++          sendJson(response, 200, updated);
++          return;
++        }
++        response.writeHead(405, { Allow: "GET, PUT" });
++        response.end();
++        return;
++      }
++      // （/api/saves 已上移到本块之前处理，因为它只有两段路径。）
++    }
++
+     if (url.pathname === "/api/train/runs") {
+       if (request.method === "GET") {
+         sendJson(response, 200, await training.listRunsAsync({
+diff --git a/server/save-files.js b/server/save-files.js
+new file mode 100644
+index 0000000..217ddc9
+--- /dev/null
++++ b/server/save-files.js
+@@ -0,0 +1,67 @@
++const fs = require("fs");
++const path = require("path");
++
++const SAVES_DIR = path.resolve(__dirname, "saves");
++// 存档 ID 白名单：只允许字母、数字、下划线、连字符，1-64 位。
++// 这条校验同时挡住路径穿越（例如 "..%2F..%2Fetc" 解码后含路径分隔符）。
++const SAVE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
++
++function ensureSavesDir() {
++  if (!fs.existsSync(SAVES_DIR)) {
++    fs.mkdirSync(SAVES_DIR, { recursive: true });
++  }
++}
++
++function isValidSaveId(id) {
++  return typeof id === "string" && SAVE_ID_PATTERN.test(id);
++}
++
++function savePathForId(id) {
++  if (!isValidSaveId(id)) {
++    return null;
++  }
++
++  const filePath = path.resolve(SAVES_DIR, `${id}.json`);
++
++  // 冗余防护：即使白名单以后被放宽，也不允许逃出 saves 目录。
++  if (!filePath.startsWith(SAVES_DIR + path.sep)) {
++    return null;
++  }
++
++  return filePath;
++}
++
++function loadSave(id) {
++  const filePath = savePathForId(id);
++  if (!filePath) return null;
++  ensureSavesDir();
++  if (!fs.existsSync(filePath)) return null;
++  try {
++    return JSON.parse(fs.readFileSync(filePath, "utf8"));
++  } catch {
++    return null;
++  }
++}
++
++function writeSave(id, save) {
++  const filePath = savePathForId(id);
++  if (!filePath) {
++    throw new Error("Invalid save id.");
++  }
++  ensureSavesDir();
++  fs.writeFileSync(filePath, JSON.stringify(save, null, 2) + "\n", "utf8");
++}
++
++function listSaveIds() {
++  ensureSavesDir();
++  try {
++    return fs.readdirSync(SAVES_DIR)
++      .filter((name) => name.endsWith(".json"))
++      .map((name) => name.slice(0, -5))
++      .filter(isValidSaveId);
++  } catch {
++    return [];
++  }
++}
++
++module.exports = { loadSave, writeSave, listSaveIds, isValidSaveId };
